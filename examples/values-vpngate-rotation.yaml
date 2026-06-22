@@ -1,0 +1,11 @@
+mode: vpngate
+
+vpngate:
+  existingSecret: vpngate-openvpn
+
+rotation:
+  enabled: true
+  schedule: "0 */6 * * *"
+  vpngate:
+    country: JP
+    random: true

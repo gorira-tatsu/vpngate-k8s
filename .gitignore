@@ -1,0 +1,15 @@
+report/
+*.kubeconfig
+*.ovpn
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+kubeconfig
+secret*.yaml
+secrets*.yaml
+*-secret.yaml
+*-secrets.yaml

@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: egress-httpbin-check
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: curl
+          image: docker.io/curlimages/curl:8.8.0
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              curl -fsSL https://httpbin.org/ip
+          env:
+            - name: HTTP_PROXY
+              value: http://egress-plugin.egress-system.svc.cluster.local:8118
+            - name: HTTPS_PROXY
+              value: http://egress-plugin.egress-system.svc.cluster.local:8118
+            - name: ALL_PROXY
+              value: socks5h://egress-plugin.egress-system.svc.cluster.local:9050
+  backoffLimit: 1

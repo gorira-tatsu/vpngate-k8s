@@ -1,0 +1,61 @@
+{{- if .Values.rotation.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "egress-plugin.fullname" . }}-rotator
+  labels:
+    {{- include "egress-plugin.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.rotation.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .Values.rotation.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.rotation.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.rotation.backoffLimit }}
+      activeDeadlineSeconds: {{ .Values.rotation.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: {{ include "egress-plugin.name" . }}-rotator
+            app.kubernetes.io/instance: {{ .Release.Name }}
+            app.kubernetes.io/component: rotator
+        spec:
+          serviceAccountName: {{ include "egress-plugin.fullname" . }}-rotator
+          restartPolicy: Never
+          containers:
+            - name: rotator
+              image: "{{ .Values.rotation.image.repository }}:{{ .Values.rotation.image.tag }}"
+              imagePullPolicy: {{ .Values.rotation.image.pullPolicy }}
+              command:
+                - /bin/sh
+                - /scripts/rotate.sh
+              env:
+                - name: MODE
+                  value: {{ .Values.mode | quote }}
+                - name: NAMESPACE
+                  value: {{ .Release.Namespace | quote }}
+                - name: TARGET_DEPLOYMENT
+                  value: {{ include "egress-plugin.fullname" . | quote }}
+                - name: ROLLOUT_TIMEOUT
+                  value: {{ .Values.rotation.rolloutTimeout | quote }}
+                - name: VPNGATE_SECRET
+                  value: {{ include "egress-plugin.vpngateSecretName" . | quote }}
+                - name: VPNGATE_SECRET_KEY
+                  value: {{ .Values.vpngate.secretKey | quote }}
+                - name: VPNGATE_COUNTRY
+                  value: {{ .Values.rotation.vpngate.country | quote }}
+                - name: VPNGATE_HOST
+                  value: {{ .Values.rotation.vpngate.host | quote }}
+                - name: VPNGATE_RANDOM
+                  value: {{ .Values.rotation.vpngate.random | quote }}
+              volumeMounts:
+                - name: rotator-script
+                  mountPath: /scripts
+                  readOnly: true
+          volumes:
+            - name: rotator-script
+              configMap:
+                name: {{ include "egress-plugin.fullname" . }}-rotator
+                defaultMode: 0555
+{{- end }}

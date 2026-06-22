@@ -1,0 +1,14 @@
+egress-plugin is installed in {{ .Release.Namespace }}.
+
+{{- if eq .Values.mode "tor" }}
+HTTP proxy:
+  http://{{ include "egress-plugin.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.httpPort }}
+
+SOCKS proxy:
+  socks5h://{{ include "egress-plugin.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.socksPort }}
+{{- else }}
+HTTP proxy:
+  http://{{ include "egress-plugin.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.httpPort }}
+{{- end }}
+
+Only workloads that explicitly set proxy environment variables will use this egress path.

@@ -1,0 +1,77 @@
+{{- if .Values.rotation.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "egress-plugin.fullname" . }}-rotator
+  labels:
+    {{- include "egress-plugin.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "egress-plugin.fullname" . }}-rotator
+  labels:
+    {{- include "egress-plugin.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    resourceNames:
+      - {{ include "egress-plugin.fullname" . }}
+    verbs:
+      - get
+      - patch
+  - apiGroups:
+      - apps
+    resources:
+      - deployments/status
+    resourceNames:
+      - {{ include "egress-plugin.fullname" . }}
+    verbs:
+      - get
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - create
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    resourceNames:
+      - {{ include "egress-plugin.vpngateSecretName" . }}
+    verbs:
+      - get
+      - update
+      - patch
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "egress-plugin.fullname" . }}-rotator
+  labels:
+    {{- include "egress-plugin.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "egress-plugin.fullname" . }}-rotator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "egress-plugin.fullname" . }}-rotator
+{{- end }}

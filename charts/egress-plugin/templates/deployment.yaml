@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "egress-plugin.fullname" . }}
+  labels:
+    {{- include "egress-plugin.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "egress-plugin.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "egress-plugin.selectorLabels" . | nindent 8 }}
+      annotations:
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+    spec:
+      containers:
+        {{- if eq .Values.mode "tor" }}
+        - name: torproxy
+          image: "{{ .Values.tor.image.repository }}:{{ .Values.tor.image.tag }}"
+          imagePullPolicy: {{ .Values.tor.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8118
+              protocol: TCP
+            - name: socks
+              containerPort: 9050
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: socks
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.tor.resources | nindent 12 }}
+        {{- else if eq .Values.mode "vpngate" }}
+        {{- if not (or .Values.vpngate.existingSecret .Values.vpngate.inlineConfig) }}
+        {{- fail "vpngate mode requires vpngate.existingSecret or vpngate.inlineConfig" }}
+        {{- end }}
+        - name: openvpn
+          image: "{{ .Values.vpngate.openvpn.image.repository }}:{{ .Values.vpngate.openvpn.image.tag }}"
+          imagePullPolicy: {{ .Values.vpngate.openvpn.image.pullPolicy }}
+          command:
+            {{- toYaml .Values.vpngate.openvpn.command | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.vpngate.openvpn.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: openvpn-config
+              mountPath: /vpn
+              readOnly: true
+          livenessProbe:
+            {{- toYaml .Values.vpngate.openvpn.livenessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.vpngate.openvpn.resources | nindent 12 }}
+        - name: http-proxy
+          image: "{{ .Values.vpngate.proxy.image.repository }}:{{ .Values.vpngate.proxy.image.tag }}"
+          imagePullPolicy: {{ .Values.vpngate.proxy.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.vpngate.proxy.port }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.vpngate.proxy.resources | nindent 12 }}
+        {{- else }}
+        {{- fail "mode must be either tor or vpngate" }}
+        {{- end }}
+      {{- if eq .Values.mode "vpngate" }}
+      volumes:
+        - name: openvpn-config
+          secret:
+            secretName: {{ include "egress-plugin.vpngateSecretName" . }}
+            items:
+              - key: {{ .Values.vpngate.secretKey }}
+                path: client.ovpn
+      {{- end }}
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+      affinity:
+        {{- toYaml .Values.affinity | nindent 8 }}

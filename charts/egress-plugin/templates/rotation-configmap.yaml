@@ -1,0 +1,106 @@
+{{- if .Values.rotation.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "egress-plugin.fullname" . }}-rotator
+  labels:
+    {{- include "egress-plugin.labels" . | nindent 4 }}
+data:
+  rotate.sh: |
+    #!/bin/sh
+    set -eu
+
+    require() {
+      command -v "$1" >/dev/null 2>&1 || {
+        echo "$1 is required" >&2
+        exit 1
+      }
+    }
+
+    restart_deployment() {
+      now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      kubectl -n "$NAMESPACE" patch deployment "$TARGET_DEPLOYMENT" \
+        -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"vpngate-k8s.local/rotated-at\":\"$now\"}}}}}"
+      kubectl -n "$NAMESPACE" rollout status deployment/"$TARGET_DEPLOYMENT" --timeout="$ROLLOUT_TIMEOUT"
+    }
+
+    require kubectl
+    require date
+
+    if [ "$MODE" = "tor" ]; then
+      restart_deployment
+      exit 0
+    fi
+
+    if [ "$MODE" != "vpngate" ]; then
+      echo "Unsupported mode: $MODE" >&2
+      exit 2
+    fi
+
+    require awk
+    require base64
+    require curl
+
+    tmp="$(mktemp)"
+    encoded_file="$(mktemp)"
+    selected_host_file="$(mktemp)"
+    trap 'rm -f "$tmp" "$encoded_file" "$selected_host_file"' EXIT
+
+    curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "https://www.vpngate.net/api/iphone/" > "$tmp"
+
+    awk -F, \
+      -v country="$VPNGATE_COUNTRY" \
+      -v host="$VPNGATE_HOST" \
+      -v randomize="$VPNGATE_RANDOM" \
+      -v selected_host_file="$selected_host_file" '
+      BEGIN { srand() }
+      /^#/ { next }
+      NF < 15 { next }
+      country != "" && $7 != country { next }
+      host != "" && $1 != host { next }
+      {
+        count++
+        hosts[count] = $1
+        configs[count] = $15
+      }
+      END {
+        if (count == 0) {
+          exit 1
+        }
+        selected_index = 1
+        if (randomize == "true") {
+          selected_index = int(rand() * count) + 1
+        }
+        print hosts[selected_index] > selected_host_file
+        print configs[selected_index]
+      }
+    ' "$tmp" > "$encoded_file"
+
+    selected_host="$(cat "$selected_host_file")"
+    if [ ! -s "$encoded_file" ] || [ -z "$selected_host" ]; then
+      echo "No VPNGate entry matched the requested filters." >&2
+      exit 1
+    fi
+
+    decoded="$(
+      base64 -d < "$encoded_file" |
+        awk '!/^data-ciphers([[:space:]]|$)/ && !/^data-ciphers-fallback([[:space:]]|$)/'
+    )"
+
+    if [ -z "$decoded" ]; then
+      echo "Decoded VPNGate OpenVPN config is empty." >&2
+      exit 1
+    fi
+
+    kubectl -n "$NAMESPACE" create secret generic "$VPNGATE_SECRET" \
+      --from-literal="$VPNGATE_SECRET_KEY=$decoded" \
+      --dry-run=client -o yaml | kubectl apply -f -
+
+    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    kubectl -n "$NAMESPACE" annotate secret "$VPNGATE_SECRET" \
+      vpngate-k8s.local/vpngate-host="$selected_host" \
+      vpngate-k8s.local/rotated-at="$now" \
+      --overwrite
+
+    restart_deployment
+{{- end }}

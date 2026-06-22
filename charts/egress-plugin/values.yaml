@@ -1,0 +1,91 @@
+mode: tor
+
+replicaCount: 1
+
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  httpPort: 8118
+  socksPort: 9050
+
+rotation:
+  enabled: false
+  schedule: "0 */6 * * *"
+  image:
+    repository: docker.io/alpine/k8s
+    tag: "1.36.2"
+    pullPolicy: IfNotPresent
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  rolloutTimeout: 240s
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  vpngate:
+    country: ""
+    host: ""
+    random: true
+
+tor:
+  image:
+    repository: docker.io/dperson/torproxy
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources: {}
+
+vpngate:
+  existingSecret: ""
+  secretKey: client.ovpn
+  inlineConfig: ""
+  openvpn:
+    image:
+      repository: docker.io/dperson/openvpn-client
+      tag: latest
+      pullPolicy: IfNotPresent
+    command:
+      - openvpn
+      - --config
+      - /vpn/client.ovpn
+      - --route
+      - 10.0.0.0
+      - 255.0.0.0
+      - net_gateway
+      - --route
+      - 172.16.0.0
+      - 255.240.0.0
+      - net_gateway
+      - --route
+      - 192.168.0.0
+      - 255.255.0.0
+      - net_gateway
+    livenessProbe:
+      exec:
+        command:
+          - sh
+          - -c
+          - ip link show tun0 >/dev/null 2>&1
+      initialDelaySeconds: 60
+      periodSeconds: 30
+      failureThreshold: 4
+    securityContext:
+      capabilities:
+        add:
+          - NET_ADMIN
+      privileged: true
+    resources: {}
+  proxy:
+    image:
+      repository: docker.io/vimagick/tinyproxy
+      tag: latest
+      pullPolicy: IfNotPresent
+    port: 8888
+    resources: {}
+
+podAnnotations: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
