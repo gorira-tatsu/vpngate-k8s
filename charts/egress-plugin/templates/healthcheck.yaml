@@ -1,0 +1,161 @@
+{{- if and .Values.rotation.enabled .Values.healthcheck.enabled }}
+{{- $fullName := include "egress-plugin.fullname" . }}
+# Active healthcheck: probe the proxy on a schedule and rotate as soon as it stops
+# working, rather than waiting for the next scheduled rotation.
+#
+# It execs the rotator's own rotate.sh, so it needs the rotator's env too — every
+# VPNGATE_* var rotate.sh reads must be set here. Missing one is not a no-op:
+# rotate.sh runs `set -u`, and the healthcheck only ever reaches it when the proxy
+# is already down, so a gap there breaks recovery exactly when it is needed.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullName }}-healthcheck
+  labels:
+    {{- include "egress-plugin.labels" . | nindent 4 }}
+data:
+  healthcheck.sh: |
+    #!/bin/sh
+    set -eu
+
+    namespace="${NAMESPACE:-{{ .Release.Namespace }}}"
+    target="${TARGET_DEPLOYMENT:-{{ $fullName }}}"
+    proxy="http://$target.$namespace.svc.cluster.local:{{ .Values.service.httpPort }}"
+    timeout="${VALIDATION_TIMEOUT_SECONDS:-20}"
+    failures_allowed="${FAILURES_ALLOWED:-1}"
+    urls="${VALIDATION_URLS:-}"
+
+    record_status() {
+      status="$1"
+      message="$2"
+      now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      kubectl -n "$namespace" create configmap {{ $fullName }}-healthcheck-status \
+        --from-literal=status="$status" \
+        --from-literal=message="$message" \
+        --from-literal=checked_at="$now" \
+        --from-literal=validation_urls="$urls" \
+        --dry-run=client -o yaml | kubectl apply -f -
+    }
+
+    failures=0
+    for url in $urls; do
+      if curl -fsS -m "$timeout" -x "$proxy" "$url" >/dev/null; then
+        echo "ok: $url"
+      else
+        failures=$((failures + 1))
+        echo "failed: $url ($failures)" >&2
+      fi
+    done
+
+    if [ "$failures" -lt "$failures_allowed" ]; then
+      record_status ok "proxy validation passed"
+      exit 0
+    fi
+
+    record_status rotating "proxy validation failed $failures time(s); rotating"
+    exec /scripts/rotate.sh
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullName }}-healthcheck-status-writer
+  labels:
+    {{- include "egress-plugin.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["{{ $fullName }}-healthcheck-status"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullName }}-healthcheck-status-writer
+  labels:
+    {{- include "egress-plugin.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullName }}-healthcheck-status-writer
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullName }}-rotator
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $fullName }}-healthcheck
+  labels:
+    {{- include "egress-plugin.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.healthcheck.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .Values.healthcheck.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.healthcheck.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: {{ .Values.healthcheck.activeDeadlineSeconds }}
+      # backoffLimit 0: a retry re-walks every candidate host with a deployment
+      # rollout each, which cannot finish inside activeDeadlineSeconds anyway.
+      backoffLimit: {{ .Values.healthcheck.backoffLimit }}
+      template:
+        metadata:
+          labels:
+            {{- include "egress-plugin.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: healthcheck
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ $fullName }}-rotator
+          containers:
+            - name: healthcheck
+              image: "{{ .Values.rotation.image.repository }}:{{ .Values.rotation.image.tag }}"
+              imagePullPolicy: {{ .Values.rotation.image.pullPolicy }}
+              command:
+                - /bin/sh
+                - /healthcheck/healthcheck.sh
+              env:
+                - name: MODE
+                  value: {{ .Values.mode | quote }}
+                - name: NAMESPACE
+                  value: {{ .Release.Namespace | quote }}
+                - name: TARGET_DEPLOYMENT
+                  value: {{ $fullName | quote }}
+                - name: ROLLOUT_TIMEOUT
+                  value: {{ .Values.rotation.rolloutTimeout | quote }}
+                - name: VPNGATE_SECRET
+                  value: {{ .Values.vpngate.existingSecret | quote }}
+                - name: VPNGATE_SECRET_KEY
+                  value: {{ .Values.vpngate.secretKey | quote }}
+                - name: VPNGATE_COUNTRY
+                  value: {{ .Values.rotation.vpngate.country | quote }}
+                - name: VPNGATE_HOST
+                  value: {{ .Values.rotation.vpngate.host | quote }}
+                - name: VPNGATE_RANDOM
+                  value: {{ .Values.rotation.vpngate.random | quote }}
+                - name: VALIDATION_URLS
+                  value: {{ .Values.healthcheck.validationUrls | quote }}
+                - name: VALIDATION_TIMEOUT_SECONDS
+                  value: {{ .Values.healthcheck.validationTimeoutSeconds | quote }}
+                - name: FAILURES_ALLOWED
+                  value: {{ .Values.healthcheck.failuresAllowed | quote }}
+              volumeMounts:
+                - name: healthcheck-script
+                  mountPath: /healthcheck
+                  readOnly: true
+                - name: rotator-script
+                  mountPath: /scripts
+                  readOnly: true
+          volumes:
+            - name: healthcheck-script
+              configMap:
+                name: {{ $fullName }}-healthcheck
+                defaultMode: 0555
+            - name: rotator-script
+              configMap:
+                name: {{ $fullName }}-rotator
+                defaultMode: 0555
+{{- end }}

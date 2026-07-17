@@ -1,3 +1,9 @@
+# Values the egress-plugin release in egress-system actually runs with.
+#
+# Keep this in step with the release. It drifted before: the schedule here said
+# "0 */6 * * *" while the live CronJob had been kubectl-edited to hourly, so any
+# helm upgrade would have silently reverted it. Hourly is the intended behaviour
+# — free VPNGate endpoints are flaky enough to want it — so it is pinned here now.
 mode: vpngate
 
 vpngate:
@@ -5,7 +11,14 @@ vpngate:
 
 rotation:
   enabled: true
-  schedule: "0 */6 * * *"
+  schedule: "17 * * * *"
   vpngate:
     country: JP
     random: true
+
+healthcheck:
+  enabled: true
+  # anond.hatelabo.jp is what webharvest crawls through this proxy, so "working"
+  # has to mean "anond answers", not merely "the proxy is up" — it can be up and
+  # still be blocked by the origin. example.com is the control.
+  validationUrls: "https://anond.hatelabo.jp/robots.txt https://anond.hatelabo.jp/?page=550 https://example.com/"

@@ -17,15 +17,37 @@ rotation:
     repository: docker.io/alpine/k8s
     tag: "1.36.2"
     pullPolicy: IfNotPresent
-  backoffLimit: 3
+  # A retry re-walks every candidate host, doing a deployment rollout per host,
+  # which does not fit in activeDeadlineSeconds — so retries just burn time and
+  # produce a cluster of Error pods per failed job. Give up and wait for the next
+  # schedule instead.
+  backoffLimit: 0
   activeDeadlineSeconds: 600
   rolloutTimeout: 240s
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
   vpngate:
     country: ""
+    # Pin to one VPNGate host. Empty means "any host matching country".
     host: ""
     random: true
+
+# Probe the proxy and rotate as soon as it breaks, instead of waiting for
+# rotation.schedule. Requires rotation.enabled (it execs the rotator's script).
+healthcheck:
+  enabled: false
+  schedule: "*/5 * * * *"
+  activeDeadlineSeconds: 900
+  backoffLimit: 0
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  # Space-separated. These are what "working" means for your workload, so set them
+  # to URLs your app actually fetches — a proxy can be up and still be blocked by
+  # the origin you care about.
+  validationUrls: "http://example.com/ https://example.com/"
+  validationTimeoutSeconds: 20
+  # Rotate once this many probes have failed.
+  failuresAllowed: 1
 
 tor:
   image:

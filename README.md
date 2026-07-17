@@ -101,6 +101,42 @@ kubectl -n egress-system get secret vpngate-openvpn \
 kubectl -n egress-system create job --from=cronjob/egress-plugin-rotator egress-plugin-rotate-now
 ```
 
+## ヘルスチェック（自動ローテーション）
+
+`rotation.schedule` を待たずに、プロキシが壊れた時点でローテーションさせたい場合は `healthcheck.enabled=true` を指定します。CronJob が `healthcheck.validationUrls` を定期的に proxy 経由で取得し、`healthcheck.failuresAllowed` 回以上失敗したら rotator の `rotate.sh` をそのまま exec します。
+
+`validationUrls` は**実際にアプリが叩く URL** にしてください。プロキシが生きていても origin 側でブロックされていれば意味がなく、`example.com` だけでは検知できません。
+
+結果は status ConfigMap に入ります。
+
+```bash
+kubectl -n egress-system get cm egress-plugin-status -o jsonpath='{.data.status}{" "}{.data.vpngate_host}{"\n"}'
+kubectl -n egress-system get cm egress-plugin-healthcheck-status -o jsonpath='{.data.status}{" "}{.data.message}{"\n"}'
+```
+
+## 消費側リポジトリでやること
+
+egress-plugin 一式（Deployment / rotator / healthcheck / status RBAC）はこの chart が所有します。プロキシを使う側のリポジトリに置くのは、**自分の ServiceAccount を束ねる RoleBinding だけ**です。chart は消費側の SA を知らないため、ここは chart 側では作れません。
+
+```yaml
+# 例: 消費側リポジトリの manifest
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: myapp-egress-status-reader
+  namespace: egress-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: egress-plugin-status-reader  # chart が作る
+subjects:
+  - kind: ServiceAccount
+    name: myapp
+    namespace: myapp
+```
+
+rotate.sh や healthcheck の manifest を消費側リポジトリにコピーして `kubectl apply` しないでください。chart が同じオブジェクトを所有しているため、`helm upgrade` で黙って巻き戻ります（実際に一度そうなりかけました）。挙動を変えたいときは values で調整します。
+
 ## 出口確認
 
 ```bash

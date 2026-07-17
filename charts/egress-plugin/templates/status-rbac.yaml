@@ -1,0 +1,58 @@
+{{- if .Values.rotation.enabled }}
+{{- $fullName := include "egress-plugin.fullname" . }}
+# Status ConfigMap RBAC. rotate.sh records the outcome of each rotation into
+# <fullname>-status so consumers can see which VPNGate host is live and whether it
+# validated; the writer half is what lets it do that.
+#
+# The reader Role is bound by each consuming app in its own repo (it grants that
+# app's ServiceAccount, which this chart knows nothing about) — see README.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullName }}-status-reader
+  labels:
+    {{- include "egress-plugin.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["{{ $fullName }}-status"]
+    verbs: ["get"]
+{{- if .Values.vpngate.existingSecret }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ .Values.vpngate.existingSecret | quote }}]
+    verbs: ["get"]
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullName }}-status-writer
+  labels:
+    {{- include "egress-plugin.labels" . | nindent 4 }}
+rules:
+  # create is unqualified: resourceNames cannot restrict create, and the
+  # ConfigMap does not exist on the first rotation.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["{{ $fullName }}-status"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullName }}-rotator-status-writer
+  labels:
+    {{- include "egress-plugin.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullName }}-status-writer
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullName }}-rotator
+    namespace: {{ .Release.Namespace }}
+{{- end }}

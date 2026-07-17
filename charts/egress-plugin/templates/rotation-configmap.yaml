@@ -24,6 +24,28 @@ data:
       kubectl -n "$NAMESPACE" rollout status deployment/"$TARGET_DEPLOYMENT" --timeout="$ROLLOUT_TIMEOUT"
     }
 
+    record_status() {
+      status="$1"
+      selected_host="$2"
+      message="$3"
+      now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      kubectl -n "$NAMESPACE" create configmap egress-plugin-status \
+        --from-literal=status="$status" \
+        --from-literal=vpngate_host="$selected_host" \
+        --from-literal=message="$message" \
+        --from-literal=validated_at="$now" \
+        --from-literal=validation_urls="${VALIDATION_URLS:-http://example.com/ https://example.com/ https://www.digital.go.jp/ https://www.nta.go.jp/ https://www.soumu.go.jp/}" \
+        --dry-run=client -o yaml | kubectl apply -f -
+    }
+
+    validate_proxy() {
+      timeout="${VALIDATION_TIMEOUT_SECONDS:-12}"
+      proxy="http://$TARGET_DEPLOYMENT.$NAMESPACE.svc.cluster.local:8118"
+      for url in ${VALIDATION_URLS:-http://example.com/ https://example.com/ https://www.digital.go.jp/ https://www.nta.go.jp/ https://www.soumu.go.jp/}; do
+        curl -fsS -m "$timeout" -x "$proxy" "$url" >/dev/null || return 1
+      done
+    }
+
     require kubectl
     require date
 
@@ -40,67 +62,80 @@ data:
     require awk
     require base64
     require curl
+    require sort
 
     tmp="$(mktemp)"
-    encoded_file="$(mktemp)"
-    selected_host_file="$(mktemp)"
-    trap 'rm -f "$tmp" "$encoded_file" "$selected_host_file"' EXIT
+    candidates="$(mktemp)"
+    trap 'rm -f "$tmp" "$candidates"' EXIT
 
     curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "https://www.vpngate.net/api/iphone/" > "$tmp"
 
     awk -F, \
       -v country="$VPNGATE_COUNTRY" \
-      -v host="$VPNGATE_HOST" \
-      -v randomize="$VPNGATE_RANDOM" \
-      -v selected_host_file="$selected_host_file" '
+      -v host="${VPNGATE_HOST:-}" \
+      -v randomize="$VPNGATE_RANDOM" '
       BEGIN { srand() }
       /^#/ { next }
       NF < 15 { next }
       country != "" && $7 != country { next }
       host != "" && $1 != host { next }
       {
-        count++
-        hosts[count] = $1
-        configs[count] = $15
-      }
-      END {
-        if (count == 0) {
-          exit 1
-        }
-        selected_index = 1
+        key = NR
         if (randomize == "true") {
-          selected_index = int(rand() * count) + 1
+          key = rand()
         }
-        print hosts[selected_index] > selected_host_file
-        print configs[selected_index]
+        print key "\t" $1 "\t" $15
       }
-    ' "$tmp" > "$encoded_file"
+    ' "$tmp" | sort -n > "$candidates"
 
-    selected_host="$(cat "$selected_host_file")"
-    if [ ! -s "$encoded_file" ] || [ -z "$selected_host" ]; then
+    if [ ! -s "$candidates" ]; then
       echo "No VPNGate entry matched the requested filters." >&2
       exit 1
     fi
 
-    decoded="$(
-      base64 -d < "$encoded_file" |
-        awk '!/^data-ciphers([[:space:]]|$)/ && !/^data-ciphers-fallback([[:space:]]|$)/'
-    )"
+    attempts="${VALIDATION_ATTEMPTS:-8}"
+    tried=0
+    while IFS="$(printf '\t')" read -r _ selected_host encoded; do
+      tried=$((tried + 1))
+      if [ "$tried" -gt "$attempts" ]; then
+        break
+      fi
 
-    if [ -z "$decoded" ]; then
-      echo "Decoded VPNGate OpenVPN config is empty." >&2
-      exit 1
-    fi
+      decoded="$(
+        printf '%s' "$encoded" |
+          base64 -d |
+          awk '!/^data-ciphers([[:space:]]|$)/ && !/^data-ciphers-fallback([[:space:]]|$)/'
+      )"
 
-    kubectl -n "$NAMESPACE" create secret generic "$VPNGATE_SECRET" \
-      --from-literal="$VPNGATE_SECRET_KEY=$decoded" \
-      --dry-run=client -o yaml | kubectl apply -f -
+      if [ -z "$decoded" ]; then
+        echo "Skipping empty VPNGate config for $selected_host" >&2
+        continue
+      fi
 
-    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    kubectl -n "$NAMESPACE" annotate secret "$VPNGATE_SECRET" \
-      vpngate-k8s.local/vpngate-host="$selected_host" \
-      vpngate-k8s.local/rotated-at="$now" \
-      --overwrite
+      echo "Trying VPNGate host $selected_host ($tried/$attempts)"
+      kubectl -n "$NAMESPACE" create secret generic "$VPNGATE_SECRET" \
+        --from-literal="$VPNGATE_SECRET_KEY=$decoded" \
+        --dry-run=client -o yaml | kubectl apply -f -
 
-    restart_deployment
+      now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      kubectl -n "$NAMESPACE" annotate secret "$VPNGATE_SECRET" \
+        vpngate-k8s.local/vpngate-host="$selected_host" \
+        vpngate-k8s.local/rotated-at="$now" \
+        --overwrite
+
+      restart_deployment
+
+      if validate_proxy; then
+        echo "Validated VPNGate host $selected_host"
+        record_status ok "$selected_host" "proxy validation passed"
+        exit 0
+      fi
+
+      echo "Validation failed for VPNGate host $selected_host" >&2
+      record_status failed "$selected_host" "proxy validation failed"
+    done < "$candidates"
+
+    echo "No VPNGate host passed proxy validation after $tried attempt(s)." >&2
+    record_status failed "" "no candidate passed proxy validation"
+    exit 1
 {{- end }}
