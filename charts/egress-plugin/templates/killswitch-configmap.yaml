@@ -1,0 +1,38 @@
+{{- if and (eq .Values.mode "vpngate") .Values.vpngate.killSwitch.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "egress-plugin.fullname" . }}-killswitch
+  labels:
+    {{- include "egress-plugin.labels" . | nindent 4 }}
+data:
+  killswitch.sh: |
+    #!/bin/sh
+    # Fail closed: only the tunnel, the VPN server(s) of client.ovpn and ALLOW_CIDRS may be reached.
+    set -eu
+    ipt=${IPTABLES:-iptables-nft}; ip6t=$(echo "$ipt" | sed 's/^iptables/ip6tables/')
+    # .ovpn files from VPNGate use CRLF line endings
+    cfg=/tmp/client.ovpn; tr -d "\\r" < /vpn/client.ovpn > "$cfg"
+    proto=$(awk '/^proto /{print $2; exit}' "$cfg"); proto=${proto:-udp}; proto=${proto%-client}
+    $ipt -F OUTPUT
+    $ipt -A OUTPUT -o lo -j ACCEPT
+    $ipt -A OUTPUT -o tun+ -j ACCEPT
+    $ipt -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    for net in $ALLOW_CIDRS; do $ipt -A OUTPUT -d "$net" -j ACCEPT; done
+    servers=0
+    for line in $(awk '/^remote /{print $2 ":" ($3 == "" ? 1194 : $3)}' "$cfg"); do
+      host=${line%:*}; port=${line##*:}
+      if echo "$host" | grep -Eq '^[0-9.]+$'; then ips=$host
+      else ips=$(nslookup "$host" 2>/dev/null | awk '/^Address/ && !/#/{print $NF}' | grep -E '^[0-9.]+$' || true); fi
+      for ip in $ips; do
+        $ipt -A OUTPUT -d "$ip" -p "$proto" --dport "$port" -j ACCEPT
+        servers=$((servers + 1)); echo "killswitch: allow VPN server $ip $proto/$port"
+      done
+    done
+    $ipt -A OUTPUT -j REJECT
+    if $ip6t -F OUTPUT 2>/dev/null; then
+      $ip6t -A OUTPUT -o lo -j ACCEPT; $ip6t -A OUTPUT -o tun+ -j ACCEPT; $ip6t -A OUTPUT -j REJECT
+    fi
+    [ "$servers" -gt 0 ] || { echo "killswitch: no VPN server found in $cfg" >&2; exit 1; }
+    echo "killswitch: on"
+{{- end }}

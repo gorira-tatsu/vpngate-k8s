@@ -16,6 +16,31 @@ spec:
       annotations:
         {{- toYaml .Values.podAnnotations | nindent 8 }}
     spec:
+      {{- if and (eq .Values.mode "vpngate") .Values.vpngate.killSwitch.enabled }}
+      # Kill switch: traffic may leave the pod only through the tunnel, to the VPN server itself, or to
+      # cluster-internal addresses. While OpenVPN is down or reconnecting, the proxy fails instead of
+      # leaking out through the node's own address.
+      initContainers:
+        - name: killswitch
+          image: "{{ .Values.vpngate.killSwitch.image }}"
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-ec", "/killswitch/killswitch.sh"]
+          env:
+            - name: IPTABLES
+              value: {{ .Values.vpngate.killSwitch.iptables | quote }}
+            - name: ALLOW_CIDRS
+              value: {{ join " " .Values.vpngate.killSwitch.allowCidrs | quote }}
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW"]
+          volumeMounts:
+            - name: openvpn-config
+              mountPath: /vpn
+              readOnly: true
+            - name: killswitch
+              mountPath: /killswitch
+              readOnly: true
+      {{- end }}
       containers:
         {{- if eq .Values.mode "tor" }}
         - name: torproxy
@@ -92,6 +117,12 @@ spec:
         {{- end }}
       {{- if eq .Values.mode "vpngate" }}
       volumes:
+        {{- if .Values.vpngate.killSwitch.enabled }}
+        - name: killswitch
+          configMap:
+            name: {{ include "egress-plugin.fullname" . }}-killswitch
+            defaultMode: 0555
+        {{- end }}
         - name: openvpn-config
           secret:
             secretName: {{ include "egress-plugin.vpngateSecretName" . }}
