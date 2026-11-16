@@ -28,6 +28,8 @@ spec:
           env:
             - name: IPTABLES
               value: {{ .Values.vpngate.killSwitch.iptables | quote }}
+            - name: DNS_CIDRS
+              value: {{ join " " .Values.vpngate.killSwitch.dnsCidrs | quote }}
             - name: ALLOW_CIDRS
               value: {{ join " " .Values.vpngate.killSwitch.allowCidrs | quote }}
           securityContext:

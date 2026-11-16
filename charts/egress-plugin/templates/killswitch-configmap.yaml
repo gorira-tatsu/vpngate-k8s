@@ -18,6 +18,12 @@ data:
     $ipt -A OUTPUT -o lo -j ACCEPT
     $ipt -A OUTPUT -o tun+ -j ACCEPT
     $ipt -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    # DNS to the cluster resolver only; nothing else inside the cluster, so a proxied request cannot
+    # reach cluster services (the proxy is used for URLs that agents choose).
+    for net in $DNS_CIDRS; do
+      $ipt -A OUTPUT -d "$net" -p udp --dport 53 -j ACCEPT
+      $ipt -A OUTPUT -d "$net" -p tcp --dport 53 -j ACCEPT
+    done
     for net in $ALLOW_CIDRS; do $ipt -A OUTPUT -d "$net" -j ACCEPT; done
     servers=0
     for line in $(awk '/^remote /{print $2 ":" ($3 == "" ? 1194 : $3)}' "$cfg"); do

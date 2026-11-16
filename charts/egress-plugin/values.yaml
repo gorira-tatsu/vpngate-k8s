@@ -64,10 +64,14 @@ vpngate:
     # Needs iptables matching the node's backend: nftables on current kernels (legacy tables are gone).
     image: docker.io/nicolaka/netshoot:v0.15@sha256:47b907d662d139d1e2f22bfe14f4efca1e3f1feed283572f47c970c780c03b61
     iptables: iptables-nft
-    allowCidrs:
+    # Cluster ranges the proxy may use for DNS (port 53) only.
+    dnsCidrs:
       - 10.0.0.0/8
       - 172.16.0.0/12
       - 192.168.0.0/16
+    # Cluster ranges the proxy may reach on any port. Empty: proxied requests cannot reach cluster
+    # services. Replies to clients are allowed regardless (conntrack).
+    allowCidrs: []
   existingSecret: ""
   secretKey: client.ovpn
   inlineConfig: ""
