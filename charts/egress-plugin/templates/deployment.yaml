@@ -52,6 +52,8 @@ spec:
               readOnly: true
           livenessProbe:
             {{- toYaml .Values.vpngate.openvpn.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.vpngate.openvpn.readinessProbe | nindent 12 }}
           resources:
             {{- toYaml .Values.vpngate.openvpn.resources | nindent 12 }}
         - name: http-proxy
@@ -63,6 +65,28 @@ spec:
               protocol: TCP
           resources:
             {{- toYaml .Values.vpngate.proxy.resources | nindent 12 }}
+        {{- if .Values.vpngate.tcpRelay.enabled }}
+        - name: tcp-relay
+          image: "{{ .Values.vpngate.tcpRelay.image.repository }}:{{ .Values.vpngate.tcpRelay.image.tag }}"
+          imagePullPolicy: {{ .Values.vpngate.tcpRelay.image.pullPolicy }}
+          args:
+            - "tcp-listen:{{ .Values.service.tcpRelayPort }},fork,reuseaddr"
+            - "tcp:{{ .Values.vpngate.tcpRelay.upstreamHost }}:{{ .Values.vpngate.tcpRelay.upstreamPort }}"
+          ports:
+            - name: tcp-relay
+              containerPort: {{ .Values.service.tcpRelayPort }}
+              protocol: TCP
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "nc -z 127.0.0.1 {{ .Values.service.tcpRelayPort }}"
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.vpngate.tcpRelay.resources | nindent 12 }}
+        {{- end }}
         {{- else }}
         {{- fail "mode must be either tor or vpngate" }}
         {{- end }}

@@ -57,6 +57,31 @@ helm install egress-plugin charts/egress-plugin \
 
 VPNGate モードは Pod のネットワーク namespace 内で OpenVPN を張り、その同じ namespace で HTTP proxy を動かします。そのため `NET_ADMIN` 権限が必要です。
 
+HTTP proxyに対応しない固定TCPプロトコルは、上流を明示したrelayをオプションで公開できます。汎用的なTCP/SOCKS出口ではなく、指定した1ホスト・1ポートだけへ接続します。
+
+```bash
+helm upgrade --install egress-plugin charts/egress-plugin \
+  --namespace egress-system \
+  --set mode=vpngate \
+  --set vpngate.existingSecret=vpngate-openvpn \
+  --set vpngate.tcpRelay.enabled=true \
+  --set vpngate.tcpRelay.upstreamHost=whois.jprs.jp \
+  --set vpngate.tcpRelay.upstreamPort=43
+```
+
+この例ではconsumerから`egress-plugin.egress-system.svc.cluster.local:9043`へ接続すると、VPNGate出口から`whois.jprs.jp:43`へ中継されます。relayは接続先サービスのレート制限を回避する用途ではありません。consumer側で全shard合計の問い合わせ頻度を制限し、制限応答では再試行を遅延させてください。
+
+接続先サービスから複数送信元と合計レートの事前承認を得た測定では、承認期限を記録した固定relay poolを作成できます。次の例は30送信元、期限2026-07-26の研究測定です。
+
+```bash
+scripts/vpngate-pool-from-csv.sh \
+  --count 30 --country JP \
+  --authorized-until 2026-07-26T00:00:00Z
+scripts/deploy-jprs-relay-pool.sh --count 30
+```
+
+各SecretにはVPNGateホスト、pool index、承認期限をannotationとして保存します。pool releaseは定期ローテーションを行わず、`egress-jprs-00`から`egress-jprs-29`までのServiceを公開します。承認された合計QPSはconsumer側の共有limiterで制御してください。
+
 OpenVPN の `redirect-gateway` でクラスタ内通信まで VPN 側に戻らないよう、標準設定では `10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16` を元のクラスタ gateway に固定します。
 
 ## IP ローリング

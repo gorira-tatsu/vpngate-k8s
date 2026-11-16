@@ -23,6 +23,12 @@ spec:
       port: {{ .Values.service.httpPort }}
       targetPort: http
       protocol: TCP
+    {{- if .Values.vpngate.tcpRelay.enabled }}
+    - name: tcp-relay
+      port: {{ .Values.service.tcpRelayPort }}
+      targetPort: tcp-relay
+      protocol: TCP
+    {{- end }}
     {{- else }}
     {{- fail "mode must be either tor or vpngate" }}
     {{- end }}

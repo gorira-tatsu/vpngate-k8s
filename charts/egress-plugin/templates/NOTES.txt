@@ -9,6 +9,11 @@ SOCKS proxy:
 {{- else }}
 HTTP proxy:
   http://{{ include "egress-plugin.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.httpPort }}
+{{- if .Values.vpngate.tcpRelay.enabled }}
+
+Fixed TCP relay:
+  {{ include "egress-plugin.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.tcpRelayPort }} -> {{ .Values.vpngate.tcpRelay.upstreamHost }}:{{ .Values.vpngate.tcpRelay.upstreamPort }}
+{{- end }}
 {{- end }}
 
 Only workloads that explicitly set proxy environment variables will use this egress path.
